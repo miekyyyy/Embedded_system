@@ -1,9 +1,10 @@
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_TSL2561_U.h>
-#include <Adafruit_NeoPixel.h>
-#include <DHT.h>
-#include <DHT_U.h>
+#include <Adafruit_Sensor.h> // Adafruit standard sensor library
+#include <Adafruit_TSL2561_U.h> // Adafruit lux sensor library
+#include <Adafruit_NeoPixel.h> // Adafruit neopixel library
+#include <DHT.h> // temperature sensor library
+#include <DHT_U.h> // temperature sensor library
+#include <LiquidCrystal_I2C.h> // lcd library
 
 // neopixel defines
 #define LED_PIN 27 // digital pin on neopixel
@@ -15,10 +16,16 @@
 #define DHTTYPE DHT11 // DHT 11
 
 // button define
-#define BUTTON_PIN 12 // digital pin on button
+#define BUTTON_PIN 21 // digital pin on button
+
+// buzzer define
+#define BUZZER 15
 
 // UV variable
 int UV = 0;
+
+// Set to false to remove the UV limit of 11 to easily test the system
+bool UVLimiter = true;
 
 class Temperature
 {
@@ -27,11 +34,10 @@ class Temperature
   Adafruit_NeoPixel pixels;
  
   Temperature() : dht(DHTPIN, DHTTYPE), pixels(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800) {}
-  uint32_t delayMS = 1000;
+
 
   void tempSetup()
   {
-    Serial.begin(115200);
     dht.begin();
     pixels.begin();
     pixels.setBrightness(BRIGHTNESS);
@@ -59,7 +65,7 @@ class Temperature
     {
       uint32_t color;
       if(i < 2)                color = pixels.Color(0, 150, 0); // green
-      else if(i < 5 && i >= 2) color = pixels.Color(150, 150, 0); // oranje like
+      else if(i < 5 && i >= 2) color = pixels.Color(150, 150, 0); // orange like
       else if(i < 7 && i >= 5) color = pixels.Color(255, 0, 0); // red
       else                     color = pixels.Color(255, 0, 255); // purple
       pixels.setPixelColor(i, color);
@@ -69,7 +75,6 @@ class Temperature
 
   void tempLoop()
   {
-    delay(delayMS);
     // Get temperature event and print its value.
     sensors_event_t event;
     dht.temperature().getEvent(&event);
@@ -77,9 +82,9 @@ class Temperature
     Serial.println(F("Error reading temperature!"));
     }
     else {
-    Serial.print(F("Temperature: "));
-    Serial.print(event.temperature);
-    Serial.println(F("°C"));
+    //Serial.print(F("Temperature: "));
+    //Serial.print(event.temperature);
+    //Serial.println(F("°C"));
     setNeoPixel(event);
     }
     // Get humidity event and print its value.
@@ -88,9 +93,9 @@ class Temperature
     Serial.println(F("Error reading humidity!"));
     }
     else {
-    Serial.print(F("Humidity: "));
-    Serial.print(event.relative_humidity);
-    Serial.println(F("%"));
+    //Serial.print(F("Humidity: "));
+    //Serial.print(event.relative_humidity);
+   // Serial.println(F("%"));
     }
   }
 };
@@ -99,7 +104,6 @@ class Light
 {
   public:
   Adafruit_TSL2561_Unified tsl;
-  uint32_t delayMS = 1000;
 
   Light() : tsl(TSL2561_ADDR_FLOAT, 12345) {}
 
@@ -131,13 +135,17 @@ class Light
   {
     tsl.getEvent(&event);
     // Everything above 2000 lux is UV 10, every 200 lux is 1 one extra UV
-    if(event.light < 2199)
+    if(event.light < 2399 && UVLimiter == true)
     {
       UV = event.light / 200;
     }
+    else if(UVLimiter == false)
+    {
+      UV = event.light / 7;
+    }
     else
     {
-      UV = 10;
+      UV = 11;
     }
 
     Serial.print(UV); Serial.println(" UV");
@@ -152,7 +160,8 @@ class Light
     /* Display the results (light is measured in lux) */
     if (event.light)
     {
-      Serial.print(event.light); Serial.println(" lux");
+      //Serial.print(event.light); 
+      //Serial.println(" lux");
       luxToUv(event);
     }
     else
@@ -161,7 +170,6 @@ class Light
         and no reliable data could be generated! */
       Serial.println("Sensor overload");
     }
-    delay(delayMS);
   }
 };
 
@@ -171,57 +179,189 @@ class SunScreen
   // For calculations we are gonna assume this person has sunscreen with SPF 30
   // For calculations we are gonna assume this person starts walking outside right when they applied their first layer of sunscreen
   public:
-  int timeTillBurn = 0;
-  bool startCountDown = true;
-  SunScreen() {}
+  // timers
+  int currentTimeTillBurn = 0;
+  int lastTimeTillBurn = 0;
+  int pastTimeAsInt = 0;
+
+  // button variables
+  bool startCountDown = false;
+  bool lastButtonState = HIGH; // vorige status van de knop
+  bool firstPressHappened = false;
+
+  // lcd initialisation
+  LiquidCrystal_I2C lcd;
+
+
+  SunScreen() : lcd(0x27,16, 2) {}
+
+  void setBuzzer()
+  {
+    if (currentTimeTillBurn <= 0)
+    {
+      tone(BUZZER, 1000); // Send 1KHz sound signal...
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      noTone(BUZZER); 
+      vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    else
+    {
+      noTone(BUZZER);  // Stop sound...
+    }
+  }
+
+  void setInitialLCD()
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Start doormiddel");
+    lcd.setCursor(0, 1);
+    lcd.print("van knop");
+  }
+
+  void setUpdatedLCD()
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(currentTimeTillBurn); lcd.print(" seconden");
+    lcd.setCursor(0, 1);
+    lcd.print("tot je verbrand");
+  }
 
   void sunscreenSetup()
   {
+    // intialize button
     pinMode(BUTTON_PIN, INPUT_PULLUP);
+    // initialize the lcd 
+    lcd.init();                      
+    lcd.backlight();
+    lcd.clear();
+    // initialize buzzer
+    pinMode(BUZZER, OUTPUT);
+  }
+  
+  void sunscreenCalculation(bool appliedSunscreen)
+  {
+    if(appliedSunscreen)
+    {
+      lastTimeTillBurn = (30 * 67) / UV;
+      lastTimeTillBurn *= 60;
+      pastTimeAsInt = 0;
+    }
+    else
+    {
+      lastTimeTillBurn = (30 * 67) / UV;
+      lastTimeTillBurn *= 60;
+      lastTimeTillBurn -= pastTimeAsInt;
+    }
   }
 
   void checkButton()
   {
-    if(digitalRead(BUTTON_PIN) == LOW)
-    {
+    bool currentState = digitalRead(BUTTON_PIN);
+    // Detect if button is pushed
+    if (lastButtonState == HIGH && currentState == LOW) {
       startCountDown = true;
+      if(firstPressHappened == false)
+      {
+        firstPressHappened = true;
+      }
+     // Serial.println("Button check");
     }
+    // Update vorige status
+    lastButtonState = currentState;
   }
 
   void sunscreenTimer(int UV)
   {
     if (startCountDown == true && UV > 0)
     {
-      timeTillBurn = (30 * 67) / UV;
+      sunscreenCalculation(true);
       startCountDown = false;
     }
-    else timeTillBurn = 0;
+    else if(firstPressHappened == true && UV > 0)
+    {
+      sunscreenCalculation(false);
+      currentTimeTillBurn = lastTimeTillBurn - 1; // min getal waardoor die om de minuut 1 naar beneden gaat;
+      lastTimeTillBurn = currentTimeTillBurn;
+      pastTimeAsInt++;
+      setUpdatedLCD();
+      setBuzzer();
+    }
+    else if(UV <= 0)
+    {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("UV te laag");
+    }
+    else
+    {
+      setInitialLCD();
+    }
   }
 
+  void buttonLoop()
+  {
+    checkButton();
+  }
   void sunscreenLoop()
   {
-    sunscreenTimer(UV);
-    checkButton();
-    Serial.print(timeTillBurn);
-    Serial.println( " minuten tot je verbrand");
+    sunscreenTimer(UV); 
+    Serial.print(currentTimeTillBurn);
+    Serial.println( " seconden tot je verbrand");
   }
 
 };
+
 Temperature temperature;
 Light light;
 SunScreen sunscreen;
 
+void tempTask(void *pvParameters) 
+{
+  for (;;) {
+    temperature.tempLoop();
+    vTaskDelay(pdMS_TO_TICKS(1000)); // elke seconde
+  }
+}
+
+void lightTask(void *pvParameters) 
+{
+  for (;;) {
+    light.lightLoop();
+    vTaskDelay(pdMS_TO_TICKS(1000)); // elke seconde
+  }
+}
+
+void sunTask(void *pvParameters) 
+{
+  for (;;) {
+    sunscreen.sunscreenLoop();
+    vTaskDelay(pdMS_TO_TICKS(1000)); // elke seconde
+  }
+}
+
+void buttonTask(void *pvParameters) 
+{
+  for (;;) {
+    sunscreen.buttonLoop();
+    vTaskDelay(pdMS_TO_TICKS(100)); // elke seconde
+  }
+}
 
 void setup() {
-  // put your setup code here, to run once:
+  Serial.begin(115200);
+  //put your setup code here, to run once:
   temperature.tempSetup();
   light.lightSetup();
   sunscreen.sunscreenSetup();
+  
+  xTaskCreatePinnedToCore(tempTask, "TempTask",  16000, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(lightTask, "LightTask",  16000, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(sunTask, "SunTask",  4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(buttonTask, "ButtonTask",  4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  temperature.tempLoop();
-  light.lightLoop();
-  sunscreen.sunscreenLoop();
+
 }
