@@ -25,17 +25,19 @@
 int UV = 0;
 
 // Set to false to remove the UV limit of 11 to easily test the system
-bool UVLimiter = true;
+bool UVLimiter = false;
 
 class Temperature
 {
   public: 
+  // initializing temperature sensor and neopixel
   DHT_Unified dht;
   Adafruit_NeoPixel pixels;
- 
+  
+  // constructor
   Temperature() : dht(DHTPIN, DHTTYPE), pixels(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800) {}
 
-
+  // the setup for this class
   void tempSetup()
   {
     dht.begin();
@@ -44,6 +46,7 @@ class Temperature
     pixels.show();
   }
 
+  // this sets the neopixel leds at the right color depending on the temperature
   void setNeoPixel(sensors_event_t event)
   {
     pixels.clear();
@@ -65,7 +68,7 @@ class Temperature
     {
       uint32_t color;
       if(i < 2)                color = pixels.Color(0, 150, 0); // green
-      else if(i < 5 && i >= 2) color = pixels.Color(150, 150, 0); // orange like
+      else if(i < 5 && i >= 2) color = pixels.Color(150, 150, 0); // orange 
       else if(i < 7 && i >= 5) color = pixels.Color(255, 0, 0); // red
       else                     color = pixels.Color(255, 0, 255); // purple
       pixels.setPixelColor(i, color);
@@ -73,6 +76,7 @@ class Temperature
     pixels.show();
   }
 
+  // the loop that keeps repeating for this class
   void tempLoop()
   {
     // Get temperature event and print its value.
@@ -103,10 +107,13 @@ class Temperature
 class Light 
 {
   public:
+  // initializing lux sensor
   Adafruit_TSL2561_Unified tsl;
 
+  // constructor
   Light() : tsl(TSL2561_ADDR_FLOAT, 12345) {}
 
+  // method delivered by library to configure light sensor
   void configureSensor(void)
   {
     /* You can also manually set the gain or enable auto-gain support */
@@ -125,12 +132,13 @@ class Light
     Serial.print  ("Timing:       "); Serial.println("13 ms");
     Serial.println("------------------------------------");
   }
-
+  // the setup for this class
   void lightSetup()
   {
     configureSensor();
   }
 
+  // converts the lux to UV for simulation
   void luxToUv(sensors_event_t event)
   {
     tsl.getEvent(&event);
@@ -150,10 +158,10 @@ class Light
 
     Serial.print(UV); Serial.println(" UV");
   }
-
+  // the loop that keeps repeating for this class
   void lightLoop()
   {
-    /* Get a new sensor event */ 
+    // Get a new sensor event 
     sensors_event_t event;
     tsl.getEvent(&event);
   
@@ -173,11 +181,11 @@ class Light
   }
 };
 
+// For calculations we are gonna assume this person has skintype I
+// For calculations we are gonna assume this person has sunscreen with SPF 30
+// For calculations we are gonna assume this person starts walking outside right when they applied their first layer of sunscreen
 class SunScreen
 {
-  // For calculations we are gonna assume this person has skintype I
-  // For calculations we are gonna assume this person has sunscreen with SPF 30
-  // For calculations we are gonna assume this person starts walking outside right when they applied their first layer of sunscreen
   public:
   // timers
   int currentTimeTillBurn = 0;
@@ -192,24 +200,26 @@ class SunScreen
   // lcd initialisation
   LiquidCrystal_I2C lcd;
 
-
+  // constructor
   SunScreen() : lcd(0x27,16, 2) {}
 
+  // this method checks if the buzzer needs to be activated
   void setBuzzer()
   {
     if (currentTimeTillBurn <= 0)
     {
-      tone(BUZZER, 1000); // Send 1KHz sound signal...
+      tone(BUZZER, 1000); // send 1KHz sound signal
       vTaskDelay(pdMS_TO_TICKS(1000));
-      noTone(BUZZER); 
+      noTone(BUZZER); // stop sound
       vTaskDelay(pdMS_TO_TICKS(1000));
     }
     else
     {
-      noTone(BUZZER);  // Stop sound...
+      noTone(BUZZER);  // stop sound
     }
   }
 
+  // this method sets the start screen of the lcd
   void setInitialLCD()
   {
     lcd.clear();
@@ -219,6 +229,7 @@ class SunScreen
     lcd.print("van knop");
   }
 
+  // this method sets the updated version of the lcd based on the remaining time untill you get burned
   void setUpdatedLCD()
   {
     lcd.clear();
@@ -228,6 +239,7 @@ class SunScreen
     lcd.print("tot je verbrand");
   }
 
+  // the setup for this class
   void sunscreenSetup()
   {
     // intialize button
@@ -240,14 +252,17 @@ class SunScreen
     pinMode(BUZZER, OUTPUT);
   }
   
+  // this method calculates the seconds needed untill you need to apply sunscreen
   void sunscreenCalculation(bool appliedSunscreen)
   {
+    // this calculates the needed seconds when you just applied sunscreen
     if(appliedSunscreen)
     {
       lastTimeTillBurn = (30 * 67) / UV;
       lastTimeTillBurn *= 60;
       pastTimeAsInt = 0;
     }
+    // this calculates the needed seconds after u applied the sunscreen
     else
     {
       lastTimeTillBurn = (30 * 67) / UV;
@@ -256,6 +271,7 @@ class SunScreen
     }
   }
 
+  // this method checks if the button has been pressed and if it was the first press
   void checkButton()
   {
     bool currentState = digitalRead(BUTTON_PIN);
@@ -266,44 +282,52 @@ class SunScreen
       {
         firstPressHappened = true;
       }
-     // Serial.println("Button check");
     }
-    // Update vorige status
+    // Update previous status
     lastButtonState = currentState;
   }
 
+  /* this method is responsible for making the sunscreen timer and using all the methods above besides the checButton 
+     to notify the person if they are burning */
   void sunscreenTimer(int UV)
   {
+    // this calculates the first time how long it will take to burn
     if (startCountDown == true && UV > 0)
     {
       sunscreenCalculation(true);
       startCountDown = false;
     }
+    // this calculates everything after the first press of the button
     else if(firstPressHappened == true && UV > 0)
     {
       sunscreenCalculation(false);
-      currentTimeTillBurn = lastTimeTillBurn - 1; // min getal waardoor die om de minuut 1 naar beneden gaat;
+      currentTimeTillBurn = lastTimeTillBurn - 1; // minus 1 because of vTaskDelay, since its an int -0.5 wont work 
       lastTimeTillBurn = currentTimeTillBurn;
       pastTimeAsInt++;
       setUpdatedLCD();
       setBuzzer();
     }
+    // this is a backup to check if the UV is to low to burn
     else if(UV <= 0)
     {
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("UV te laag");
     }
+    // this sets the start lcd
     else
     {
       setInitialLCD();
     }
   }
 
+  // this is for the button loop
   void buttonLoop()
   {
     checkButton();
   }
+  
+  // this is for the sunscreen loop
   void sunscreenLoop()
   {
     sunscreenTimer(UV); 
@@ -313,49 +337,55 @@ class SunScreen
 
 };
 
+// initializing the classes
 Temperature temperature;
 Light light;
 SunScreen sunscreen;
 
+// this task calls the temperature loop
 void tempTask(void *pvParameters) 
 {
   for (;;) {
     temperature.tempLoop();
-    vTaskDelay(pdMS_TO_TICKS(1000)); // elke seconde
+    vTaskDelay(pdMS_TO_TICKS(1000)); // every second
   }
 }
 
+// this task calls the light loop
 void lightTask(void *pvParameters) 
 {
   for (;;) {
     light.lightLoop();
-    vTaskDelay(pdMS_TO_TICKS(1000)); // elke seconde
+    vTaskDelay(pdMS_TO_TICKS(1000)); // every second
   }
 }
 
+// this task calls the sunscreen loop
 void sunTask(void *pvParameters) 
 {
   for (;;) {
     sunscreen.sunscreenLoop();
-    vTaskDelay(pdMS_TO_TICKS(1000)); // elke seconde
+    vTaskDelay(pdMS_TO_TICKS(1000)); // every second
   }
 }
 
+// this task calls the button loop
 void buttonTask(void *pvParameters) 
 {
   for (;;) {
     sunscreen.buttonLoop();
-    vTaskDelay(pdMS_TO_TICKS(100)); // elke seconde
+    vTaskDelay(pdMS_TO_TICKS(100)); // every 10th of a second
   }
 }
 
 void setup() {
   Serial.begin(115200);
-  //put your setup code here, to run once:
+  // the setups of the classes
   temperature.tempSetup();
   light.lightSetup();
   sunscreen.sunscreenSetup();
   
+  // initializing the tasks 
   xTaskCreatePinnedToCore(tempTask, "TempTask",  16000, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(lightTask, "LightTask",  16000, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(sunTask, "SunTask",  4096, NULL, 1, NULL, 0);
